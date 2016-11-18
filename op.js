@@ -2,6 +2,7 @@ var mongoose = require("mongoose");
 var express = require('express');
 var router = express.Router();
 var monk = require('monk')
+var fs = require('fs')
 var DB = monk('localhost:27017/users')
 
 router.login = function (req, res) {
@@ -30,6 +31,12 @@ router.login = function (req, res) {
             }
         }
     })
+}
+
+
+
+router.delFile = function (path) {
+    fs.unlinkSync(path) 
 }
 
 module.exports = router;

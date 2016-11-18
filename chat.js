@@ -15,6 +15,7 @@ var IO = require('socket.io');
 var server = require('http').createServer(app);
 
 var message = require('./schema/message.js');
+var multiparty = require('connect-multiparty')
 
 //  hat模块生成不重复ID
 var hat = require('hat')
@@ -28,7 +29,7 @@ var Message = mongoose.model('Message', message);
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'))
-app.set('view engine', 'ejs')
+app.set('view engine', 'jade')
 
 // uncomment after placing your favicon in /public
 //app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')))
@@ -41,17 +42,18 @@ app.use(express.static(path.join(__dirname, 'public')))
 socketIO.on('connect', function (socket) {
 
     //加入指定房间
-    socket.on('join', function (roomID, id, name) {
+    socket.on('join', function (roomID, token, name) {
 
         db.create(roomID);
 
         if (!roomInfo[roomID]) {
             console.log('尚未建立此房间,正在创建..')
             roomInfo[roomID] = [];
-            socket.join(roomID)
+
         }
-        if (roomInfo[roomID].indexOf(id) === -1) {
-            roomInfo[roomID].push(id)
+        socket.join(roomID)
+        if (roomInfo[roomID].indexOf(token) === -1) {
+            roomInfo[roomID].push(token)
         }
         console.log('人员数:' + roomInfo[roomID])
 
@@ -80,7 +82,7 @@ socketIO.on('connect', function (socket) {
 
         console.log('剩下的人数:' + roomInfo[roomID])
 
-        if (roomInfo[roomID].length == 0) {
+        if (!roomInfo[roomID]) {
             socket.leave(roomID) //如果人数为0,退出房间
             console.log('房间已关闭')
         }
@@ -96,37 +98,29 @@ socketIO.on('connect', function (socket) {
         console.log('收到一条信息:' + msg)
         var created = new Date().getTime().toString()
         var collection = db.get(roomID);
-        // var message = new Message({
-        //     'name': name,
-        //     'userIconUrl': userIconUrl,
-        //     'msg': msg,
-        // })
-        // message.save( function (err) {
-        //     if (err) {
-        //         console.log(err.message)
-        //     }
-        //     console.log('数据存储成功!')
-        // })
+
         collection.insert({
             'name': name,
             'token': token,
             'msg': msg,
             'thumb': thumb,
-            'created': created
+            'created': created,
+            'phone': '1870260503',
         })
 
         //验证用户如果不在房间则不发送
-        if (roomInfo[roomID].indexOf(token) === -1) {
+        if (roomInfo[roomID] && roomInfo[roomID].indexOf(token) === -1) {
+            console.log('用户不在房间')
             return false;
         }
-        socketIO.to(roomID).emit('msg', token, name, msg, thumb,created);
+        socketIO.sockets.in(roomID).emit('msg', token, name, msg, thumb, created);
     })
 })
 app.get('/', function (req, res) {
     res.send('connect succeed')
 })
 
-app.get('/chatroom/', function (req, res) {
+app.get('/chatroom', function (req, res) {
 
     // var name = db.get('110').name; //取数据库的名字
     var roomID = url.parse(req.url, true).query.roomid;
@@ -140,8 +134,10 @@ app.get('/chatroom/', function (req, res) {
             for (var i = 0; i < docs.length; i++) {
                 if (docs[i].token == token) {
                     docs[i].type = 1
+                    console.log(i + 'token same')
+                } else {
+                    docs[i].type = 0;
                 }
-                docs[i].type = 0;
             }
         }
 
@@ -149,7 +145,7 @@ app.get('/chatroom/', function (req, res) {
     })
 })
 
-app.post('/login', function (req, res) {
+app.post('/login', function (req, res) { //返回0，用户名不存在 返回1，密码错误'
     var collection = DB.get("user")
     var b = req.body;
     console.log('body:' + req)
@@ -159,18 +155,18 @@ app.post('/login', function (req, res) {
     collection.find({ 'name': name }, function (err, docs) {
         if (err) {
             console.log(err)
-            res.send('请求失败')
+            res.send('网络请求失败,请检查网络状况。。')
         } else {
             if (docs.length == 0 || docs == null) {
-                console.log("用户名不存在!")
-                res.send('用户名不存在')
+                console.log("用户名不存在")
+                res.send('0')
             } else {
                 if (docs[0].pwd == pwd) {
                     console.log('succeed')
-                    res.send(docs[0])
+                    res.send(docs)
                 } else {
                     console.log("密码错误!")
-                    res.send('密码错误')
+                    res.send('1')
                 }
             }
         }
@@ -188,24 +184,50 @@ app.post('/register', function (req, res) {
     }, function (err, docs) {
         if (docs.length == 0 || docs == null) {
             var UID = rack()
-            collection.insert({
+            var user = {
+                "id": UID,
                 "name": name,
                 "pwd": pwd,
                 "token": UID,
                 "expires": "1233453456",
                 "openid": "23443215435",
                 "created": new Date().getTime().toString(),
-                "thumb": "http://"
-            }, function (err) {
-                res.send('注册成功')
+                "thumb": "http://img06.tooopen.com/images/20161027/tooopen_sl_183292912725.jpg",
+                "followed": [],
+                "friend": [],
+                "phone": "",
+                "sex": req.body.sex || 0,
+            }
+            collection.insert(user, function (err) {
+                res.send(user)
             })
 
         } else {
             console.log("用户名已存在")
-            res.send('用户名已存在')
+            res.send('1') //用户名已存在
         }
     })
 })
+
+
+app.post('/uploadhead', multiparty({ uploadDir: './public/images/head' }), function (req, res) {
+    var collection = DB.get("user")
+    var path = req.files.images.path
+    var userid = req.body.userId
+    var sex = req.body.sex //
+    var thumb = path.substring(6).replace(/\\/g,"/") //将存在数据库的缩略图路径,replace 将饭斜杠替换成正斜杠
+    var head = req.body.thumb //接收传来的图片路径
+    collection.update({ "id": userid }, { $set: { "thumb": thumb, "sex": sex } }, function (err, numberAffected, raw) {
+        if (err) {
+            res.send('上传失败' + err.getMessage);
+
+        } else {
+            res.send(thumb);
+            router.delFile('public/'+head )
+        }
+    })
+})
+
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {
@@ -239,6 +261,6 @@ app.use(function (err, req, res, next) {
 })
 
 
-server.listen(3000, function () {
-    console.log('server listening port 3000..');
+server.listen(2016, function () {
+    console.log('server listening port 2016..');
 })
