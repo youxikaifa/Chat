@@ -93,21 +93,22 @@ socketIO.on('connect', function (socket) {
 
 
     //接受用户发送的信息,发送到指定房间    
-    socket.on('message', function (roomID, message_id, name, msg, thumb) {
+    socket.on('message', function (roomID, userid, name, msg, thumb, label_thumb, label_title, message_id) {
         //user 包括id 头像url msg uername
         console.log('收到一条信息:' + msg)
-        console.log("fangjian"+roomID)
+        console.log("fangjian" + roomID)
         var created = new Date().getTime().toString()
         var collection = db.get(roomID);
 
         collection.insert({
             "label_id": roomID,
-            "thumb": "http://",
-            "title": "caonima",
+            "thumb": label_thumb,
+            "title": label_title,
             "unReadNum": 0,
             "msgBean": {
                 "message_id": message_id,
-                "thumb": "http:??",
+                "user_id": userid,
+                "thumb": thumb,
                 "name": name,
                 "msg": msg,
                 "type": 0,
@@ -122,10 +123,10 @@ socketIO.on('connect', function (socket) {
         })
 
         //验证用户如果不在房间则不发送
-        if (roomInfo[roomID] && roomInfo[roomID].indexOf(message_id) === -1) {
+        if (roomInfo[roomID] && roomInfo[roomID].indexOf(userid) === -1) {
             console.log('用户不在房间')
         } else {
-            socketIO.sockets.in(roomID).emit('msg', message_id, name, msg, thumb, created, roomID);
+            socketIO.sockets.to(roomID).emit('msg', userid, name, msg, thumb, created, roomID, label_thumb, label_title);
         }
 
     })
@@ -138,7 +139,7 @@ app.get('/getJoinRoom', function (req, res) {
     var roomids = []  //存放房间id
     var backInfo = [] //存放返回的信息
 
-    userCollection.find({ "id": user_id }, function (err, docs) {
+    userCollection.find({ "_id": user_id }, function (err, docs) {
         console.log(docs[0])
         if (err) {
             console.log(err)
@@ -147,7 +148,7 @@ app.get('/getJoinRoom', function (req, res) {
             roomids = docs[0].rooms || [];
             console.log(roomids)
             for (var i = 0; i < roomids.length; i++) {
-                labelCollection.find({ "id": roomids[i] }, function (err, docs) {
+                labelCollection.find({ "_id": roomids[i] }, function (err, docs) {
                     var object = {}
                     object.head = docs[0].head;
                     object.title = docs[0].title;
@@ -165,12 +166,17 @@ app.get('/joinRoom', function (req, res) {
     var user_id = req.query.user_id;
     var label_id = req.query.label_id;
     var userCollection = DB.get("user")
-    userCollection.update({ "id": user_id }, { $push: { "rooms": label_id } }, function (err, raw) {
+    userCollection.update({ "_id": user_id }, { $push: { "rooms": label_id } }, function (err, raw) {
         if (err) {
             res.send(err)
         } else {
-            res.send("join succ")
-            console.log("succ")
+            userCollection.find({ "_id": user_id }, function (err, docs) {
+                if (err) {
+                    console.log(err)
+                } else {
+                    res.send(docs[0])
+                }
+            })
         }
     })
 })
@@ -190,36 +196,20 @@ app.get('/chatroom', function (req, res) {
         if (err) {
             res.send(err.message)
         } else {
-
-            if (docs.length == 0) {
-                var label = labelDb.get("labels")
-                label.find({ "id": label_id }, function (err, docs) {
-                    if (err) {
-                        res.send(err)
-                    } else {
-                        var room = {
-                            "label_id": docs[0].id,
-                            "thumb": docs[0].head,
-                            "title": docs[0].title,
-                        }
-                        res.send(room)
-                    }
-                })
-            } else {
+            if (docs.length != 0) {
                 for (var i = 0; i < docs.length; i++) {
-                    if (docs[i].userid == user_id) {
-                        docs[i].type = 1
+                    if (docs[i].msgBean.user_id == user_id) {
+                        docs[i].msgBean.type = 1
                         console.log(i + 'user_id same')
                     } else {
-                        docs[i].type = 0;
+                        docs[i].msgBean.type = 0;
                     }
                 }
                 res.send(docs)
+            } else {
+                res.send(docs)
             }
-
         }
-
-
     })
 })
 
@@ -266,21 +256,20 @@ app.post('/login', function (req, res) { //返回0，用户名不存在 返回1�
 
 app.post('/loginForThree', function (req, res) {
     var collection = DB.get("user")
-    var id = req.body.id;
+    var openid = req.body.openid
     console.log(req.body)
-    collection.find({ "id": id }, function (err, docs) {
+    collection.find({ "openid": openid }, function (err, docs) {
         if (docs.length == 0 || docs == null) {
             console.log('未找到')
             var UID = rack()
             var user = {
-                "id": id,
                 "name": req.body.name,
                 "sex": req.body.sex || 0,
                 "account": "",
                 "pwd": "",
                 "token": req.body.token,
                 "expires": new Date().getTime().toString(),
-                "openid": req.body.openid,
+                "openid": openid,
                 "created": new Date().getTime().toString(),
                 "thumb": req.body.thumb,
                 "followed": [],
@@ -291,12 +280,23 @@ app.post('/loginForThree', function (req, res) {
                 "collections": [],
                 "school": "",
                 "skill": "",
+                "motto":"",
                 "habit": "",
                 "contact": {},
                 "rooms": []
             }
             collection.insert(user, function (err) {
-                res.send(user)
+                if (err) {
+                    console.log(err)
+                } else {
+                    collection.find({ "openid": openid }, function (err, docs) {
+                        if (err) {
+                            console.log(err)
+                        } else {
+                            res.send(docs[0])
+                        }
+                    })
+                }
             })
         } else {
             console.log("已存在")
@@ -318,7 +318,6 @@ app.post('/register', function (req, res) {
         if (docs.length == 0 || docs == null) {
             var UID = rack()
             var user = {
-                "id": UID,
                 "name": "",
                 "account": account,
                 "pwd": pwd,
@@ -331,10 +330,11 @@ app.post('/register', function (req, res) {
                 "friend": [],
                 "sex": req.body.sex || 0,
                 "fans": [],
-                "reduce": "",
+                "reduce": "暂无简介",
                 "following": [],
                 "collections": [],
                 "school": "",
+                "motto":"",
                 "skill": "",
                 "habit": "",
                 "contact": {},
@@ -358,7 +358,9 @@ app.post('/uploadhead', multiparty({ uploadDir: './public/images/head' }), funct
     var path;
     var userid = req.body.userId
     var sex = req.body.sex //
-    var name = req.body.name || "我还没名字呢"
+    var name = req.body.name || "匿名"
+    var school = req.body.school 
+    var motto = req.body.motto 
     if (req.files.images != null) {
         path = req.files.images.path
         thumb = path.substring(6).replace(/\\/g, "/") //将存在数据库的缩略图路径,replace 将饭斜杠替换成正斜杠
@@ -370,9 +372,11 @@ app.post('/uploadhead', multiparty({ uploadDir: './public/images/head' }), funct
     var user = {
         "thumb": thumb,
         "sex": sex,
-        "name": name
+        "name": name,
+        "school":school,
+        "motto":motto
     }
-    collection.update({ "id": userid }, {
+    collection.update({ "_id": userid }, {
         $set: user
     }, function (err, result) {
 
@@ -390,7 +394,7 @@ app.post('/notice', function (req, res) {
     var collection = DB.get("user")
     var id = req.query.id
     var userId = req.query.userId
-    collection.update({ "id": id }, { $push: { "folled": userId } }, function (err, result) {
+    collection.update({ "_id": id }, { $push: { "followed": userId } }, function (err, result) {
         if (err) {
             res.send(err)
         } else {
@@ -403,9 +407,9 @@ app.post('/notice', function (req, res) {
 app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), function (req, res) {
     var collection = DB.get("user")
     var id = req.body.id;
-    var oldUser, newUser, path, newThumb, oldThumb, name, reduce, school, skill, habit, phone, qq, weixin, weibo;
+    var oldUser, newUser, path, newThumb, oldThumb, name, reduce, school, motto, skill, habit, phone, qq, weixin, weibo;
 
-    collection.find({ "id": id }, function (err, docs) {
+    collection.find({ "_id": id }, function (err, docs) {
         console.log(docs[0])
         oldUser = docs[0];
 
@@ -434,6 +438,12 @@ app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), funct
             school = oldUser.school;
         } else {
             school = req.body.school;
+        }
+
+        if (req.body.motto.length == 0) {
+            motto = oldUser.motto;
+        } else {
+            motto = req.body.motto;
         }
 
         if (req.body.skill.length == 0) {
@@ -481,6 +491,7 @@ app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), funct
             "school": school,
             "skill": skill,
             "habit": habit,
+            "motto": motto, //座右铭
             "contact": {
                 "phone": phone,
                 "qq": qq,
@@ -489,7 +500,7 @@ app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), funct
             }
         }
 
-        collection.update({ "id": id }, {
+        collection.update({ "_id": id }, {
             $set: newUser
         }, function (err, result) {
             if (err) {
@@ -498,7 +509,7 @@ app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), funct
                 router.delFile('public/' + req.body.oldThumbPath)
             }
         })
-        collection.find({ "id": id }, function (err, docs) {
+        collection.find({ "_id": id }, function (err, docs) {
             if (err) {
                 res.send(err.getMessage)
             } else {
@@ -512,10 +523,10 @@ app.post('/fixUserMsg', multiparty({ uploadDir: './public/images/head' }), funct
 
 })
 
-app.get('/getUserInfo', function (req, res) { 
+app.get('/getUserInfo', function (req, res) {
     var userColl = DB.get("user")
     var user_id = req.query.user_id;
-    userColl.find({ "id": user_id }, function (err, docs) {
+    userColl.find({ "_id": user_id }, function (err, docs) {
         if (err) {
             console.log(err.getMessage)
         } else {
@@ -528,7 +539,7 @@ app.get('/addFriend', function (req, res) {
     var my_id = req.query.my_id;
     var other_id = req.query.other_id;
     var userColl = DB.get("user")
-    userColl.update({ "id": other_id }, { $push: { "friend": my_id } }, function (err, raw) {
+    userColl.update({ "_id": other_id }, { $push: { "friend": my_id } }, function (err, raw) {
         if (err) {
             console.log(err.getMessage)
         } else {
@@ -541,7 +552,7 @@ app.get('/unAddFriend', function (req, res) {
     var my_id = req.query.my_id;
     var other_id = req.query.other_id;
     var userColl = DB.get("user")
-    userColl.update({ "id": other_id }, { $pull: { "friend": my_id } }, function (err, raw) {
+    userColl.update({ "_id": other_id }, { $pull: { "friend": my_id } }, function (err, raw) {
         if (err) {
             console.log(err.getMessage)
         } else {
